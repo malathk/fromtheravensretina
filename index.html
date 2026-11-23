@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>A Quantum Compass, Rendered</title>
+
+<style>
+  :root {
+    --ink: #e8eef7;
+    --dim: #9aa8ba;
+    --panel: #070b14;
+    --edge: rgba(255, 255, 255, 0.08);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    background: #03060c;
+    color: var(--ink);
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    overflow: hidden;
+  }
+
+  header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 10;
+    padding: 22px 28px 16px;
+    pointer-events: none;
+    background: linear-gradient(
+      to bottom,
+      rgba(3, 6, 12, 0.92),
+      rgba(3, 6, 12, 0)
+    );
+  }
+
+  h1 {
+    margin: 0;
+    font-size: 19px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+  }
+
+  .subtitle {
+    margin-top: 5px;
+    max-width: 760px;
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: var(--dim);
+  }
+
+  #stage {
+    position: fixed;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+  }
+
+  .view-label {
+    position: fixed;
+    bottom: 30px;
+    z-index: 10;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: rgba(232, 238, 247, 0.68);
+    pointer-events: none;
+  }
+
+  #left-label {
+    left: 4%;
+  }
+
+  #right-label {
+    right: 4%;
+    text-align: right;
+  }
+
+  .hint {
+    position: fixed;
+    bottom: 76px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    padding: 9px 15px;
+    border: 1px solid var(--edge);
+    border-radius: 100px;
+    background: rgba(7, 11, 20, 0.72);
+    font-size: 11.5px;
+    color: var(--dim);
+    pointer-events: none;
+    backdrop-filter: blur(8px);
+    transition: opacity 0.5s ease;
+  }
+
+  .hint.hidden {
+    opacity: 0;
+  }
+
+  .corner {
+    position: fixed;
+    z-index: 10;
+    font-size: 10.5px;
+    color: rgba(154, 168, 186, 0.72);
+    pointer-events: none;
+  }
+
+  #top-right {
+    top: 24px;
+    right: 28px;
+    text-align: right;
+    line-height: 1.5;
+  }
+
+  #bottom-left {
+    bottom: 24px;
+    left: 28px;
+    max-width: 330px;
+    line-height: 1.45;
+  }
+
+  .divider {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 1px;
+    background: rgba(255, 255, 255, 0.07);
+    z-index: 5;
+    pointer-events: none;
+  }
+
+  @media (max-width: 760px) {
+    .subtitle,
+    #bottom-left {
+      display: none;
+    }
+  }
+</style>
+</head>
+
+<body>
+
+<header>
+  <h1>A Quantum Compass, Rendered</h1>
+  <div class="subtitle">
+    A speculative visualisation of the radical-pair hypothesis: light may create
+    spin-correlated radicals in cryptochrome proteins in a bird’s retina. Their
+    singlet–triplet dynamics could depend on molecular orientation relative to
+    Earth’s magnetic field.
+  </div>
+</header>
+
+<canvas id="stage"></canvas>
+
+<div class="divider"></div>
+
+<div class="view-label" id="left-label">
+  Raven’s perspective<br />magnetic modulation
+</div>
+
+<div class="view-label" id="right-label">
+  Inside the eye<br />click the retina to enter
+</div>
+
+<div class="hint" id="hint">
+  Drag to change orientation · click the retina to zoom into the spin state
+</div>
+
+<div class="corner" id="top-right">
+  Radical-pair hypothesis<br />
+  Illustrative model
+</div>
+
+<div class="corner" id="bottom-left">
+  This is not a simulation of raven vision. It is a designed interpretation of
+  a proposed quantum-biological mechanism.
+</div>
+
+<script id="vertex" type="x-shader/x-vertex">
+attribute vec2 a_position;
+varying vec2 v_uv;
+
+void main() {
+  v_uv = a_position * 0.5 + 0.5;
+  gl_Position = vec4(a_position, 0.0, 1.0);
+}
+</script>
+
+<script id="fragment" type="x-shader/x-fragment">
+precision highp float;
+
+varying vec2 v_uv;
+
+uniform vec2 u_resolution;
+uniform float u_time;
+uniform float u_zoom;
+uniform float u_hover;
+uniform vec3 u_field;
+uniform float u_headYaw;
+uniform float u_headPitch;
+
+const float PI = 3.14159265359;
+
+// ---------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------
+
+float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+
+  float a = hash(i);
+  float b = hash(i + vec2(1.0, 0.0));
+  float c = hash(i + vec2(0.0, 1.0));
+  float d = hash(i + vec2(1.0, 1.0));
+
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+float fbm(vec2 p) {
+  float value = 0.0;
+  float amplitude = 0.5;
+
+  for (int i = 0; i < 5; i++) {
+    value += amplitude * noise(p);
+    p *= 2.03;
+    amplitude *= 0.5;
+  }
+
+  return value;
+}
+
+mat2 rotate(float angle) {
+  float c = cos(angle);
+  float s = sin(angle);
+  return mat2(c, -s, s, c);
+}
+
+// ---------------------------------------------------------------
+// Raven’s visual field
+//
+// The pattern is intentionally abstract. It represents a possible
+// orientation-dependent visual modulation, not a proven percept.
+// ---------------------------------------------------------------
+
+vec3 ravenView(vec2 uv) {
+  vec2 p = uv * 2.0 - 1.0;
+  float r = length(p);
+
+  // A wide, slightly distorted visual field.
+  float horizon = 0.08 + 0.025 * sin(uv.x * 9.0 + u_time * 0.15);
+  float skyMask = smoothstep(horizon + 0.02, horizon - 0.02, uv.y);
+
+  vec3 sky = mix(
+    vec3(0.035, 0.055, 0.10),
+    vec3(0.10, 0.15, 0.21),
+    smoothstep(-0.2, 1.0, uv.y)
+  );
+
+  vec3 ground = mix(
+    vec3(0.025, 0.030, 0.036),
+    vec3(0.055, 0.062, 0.062),
+    smoothstep(0.0, 0.7, 1.0 - uv.y)
+  );
+
+  vec3 colour = mix(ground, sky, skyMask);
+
+  // Atmospheric depth and faint terrain variation.
+  float atmosphere = fbm(uv * 5.0 + vec2(u_time * 0.03, 0.0));
+  colour += atmosphere * 0.035;
+
+  // The bird looks along the +z axis.
+  vec3 viewDirection = normalize(vec3(p.x, p.y, 1.0));
+
+  // Apply head yaw and pitch.
+  float yaw = u_headYaw;
+  float pitch = u_headPitch;
+
+  mat3 yawMatrix = mat3(
+    cos(yaw), 0.0, sin(yaw),
+    0.0, 1.0, 0.0,
+    -sin(yaw), 0.0, cos(yaw)
+  );
+
+  mat3 pitchMatrix = mat3(
+    1.0, 0.0, 0.0,
+    0.0, cos(pitch), -sin(pitch),
+    0.0, sin(pitch), cos(pitch)
+  );
+
+  viewDirection = pitchMatrix * yawMatrix * viewDirection;
+
+  // Alignment with the magnetic-field axis.
+  // Radical-pair models are generally inclination-sensitive rather than
+  // polarity-sensitive, so the pattern is symmetric under B -> -B.
+  float alignment = abs(dot(viewDirection, u_field));
+
+  // Create a broad, soft axial modulation.
+  float axialPattern = pow(1.0 - alignment, 2.2);
+
+  // Add a subtle azimuthal structure around the field axis.
+  vec3 fieldPerp = normalize(
+    abs(u_field.y) < 0.95
+      ? cross(u_field, vec3(0.0, 1.0, 0.0))
+      : cross(u_field, vec3(1.0, 0.0, 0.0))
+  );
+
+  float azimuth = atan(
+    dot(viewDirection, fieldPerp),
+    dot(viewDirection, normalize(cross(u_field, fieldPerp)))
+  );
+
+  float rings = 0.5 + 0.5 * sin(azimuth * 3.0 + u_time * 0.25);
+  rings = mix(0.75, 1.0, rings);
+
+  float modulation = axialPattern * rings;
+
+  // A blue-violet cryptochrome-like veil.
+  vec3 compassColour = mix(
+    vec3(0.10, 0.35, 0.75),
+    vec3(0.55, 0.25, 0.85),
+    axialPattern
+  );
+
+  colour += compassColour * modulation * 0.72;
+
+  // A bright, diffuse locus near the field axis.
+  float focus = smoothstep(0.94, 1.0, alignment);
+  colour += vec3(0.65, 0.80, 1.0) * focus * 0.25;
+
+  // Gentle vignette.
+  colour *= smoothstep(1.35, 0.25, r);
+
+  return colour;
+}
+
+// ---------------------------------------------------------------
+// Inside the eye: retinal map
+// ---------------------------------------------------------------
+
+vec3 retinaView(vec2 uv) {
+  vec2 p = uv * 2.0 - 1.0;
+  float r = length(p);
+
+  float retinaMask = smoothstep(1.02, 0.97, r);
+
+  // A dark ocular interior.
+  vec3 colour = mix(
+    vec3(0.012, 0.017, 0.026),
+    vec3(0.035, 0.045, 0.062),
+    smoothstep(1.0, 0.0, r)
+  );
+
+  // Cryptochrome-like receptor field.
+  float cells = fbm(p * 16.0 + 3.0);
+  cells = smoothstep(0.42, 0.78, cells);
+
+  // Orientation-dependent response.
+  // Each retinal direction is treated as a receptor orientation.
+  vec3 receptor = normalize(vec3(p.x, p.y, 0.55));
+  float alignment = abs(dot(receptor, u_field));
+
+  float response = pow(1.0 - alignment, 1.8);
+  response *= 0.65 + 0.55 * cells;
+
+  // Slow coherent shimmer: a visual metaphor for spin dynamics.
+  float shimmer = 0.5 + 0.5 * sin(
+    u_time * 1.1 + alignment * 14.0 + cells * 8.0
+  );
+
+  response *= 0.72 + 0.28 * shimmer;
+
+  vec3 singlet = vec3(0.16, 0.55, 0.92);
+  vec3 triplet = vec3(0.92, 0.42, 0.18);
+
+  colour += mix(triplet, singlet, 1.0 - response) * response * 0.55;
+
+  // Retinal rim.
+  float rim = smoothstep(0.82, 1.0, r);
+  colour += vec3(0.20, 0.42, 0.62) * rim * 0.25;
+
+  // Hover feedback.
+  colour += vec3(0.55, 0.80, 1.0) * u_hover * 0.10;
+
+  // Click-to-enter zoom.
+  float zoom = u_zoom;
+  float iris = smoothstep(0.72 - zoom * 0.35, 0.70 - zoom * 0.35, r);
+  colour = mix(colour, vec3(0.005, 0.008, 0.014), iris);
+
+  colour *= retinaMask;
+
+  return colour;
+}
+
+// ---------------------------------------------------------------
+// Inside a cryptochrome: radical-pair spin animation
+// ---------------------------------------------------------------
+
+vec3 spinView(vec2 uv) {
+  vec2 p = (uv * 2.0 - 1.0) / max(u_zoom, 0.001);
+  p *= 0.55;
+
+  float r = length(p);
+
+  vec3 colour = mix(
+    vec3(0.006, 0.010, 0.020),
+    vec3(0.020, 0.030, 0.050),
+    smoothstep(1.2, 0.0, r)
+  );
+
+  // Molecular scaffold: an abstract cryptochrome cavity.
+  float scaffold = smoothstep(0.98, 0.94, abs(r - 0.72) - 0.04);
+  colour += vec3(0.20, 0.30, 0.42) * scaffold * 0.45;
+
+  float internalGlow = fbm(p * 7.0 + u_time * 0.08);
+  colour += vec3(0.08, 0.14, 0.24) * internalGlow * 0.35;
+
+  // Donor and acceptor radical sites.
+  vec2 donor = vec2(-0.30, 0.0);
+  vec2 acceptor = vec2(0.30, 0.0);
+
+  float donorGlow = exp(-18.0 * length(p - donor));
+  float acceptorGlow = exp(-18.0 * length(p - acceptor));
+
+  colour += vec3(1.0, 0.42, 0.20) * donorGlow * 0.85;
+  colour += vec3(0.20, 0.65, 1.0) * acceptorGlow * 0.85;
+
+  // Connection between radicals.
+  float bond = smoothstep(
+    0.035, 0.0,
+    abs(p.y) - 0.012
+  ) * smoothstep(0.34, 0.24, abs(p.x));
+
+  colour += vec3(0.75, 0.82, 0.95) * bond * 0.30;
+
+  // Electron spin precession.
+  float t = u_time * 1.4;
+
+  vec2 e1 = vec2(
+    -0.30 + 0.16 * cos(t),
+    0.30 * sin(t)
+  );
+
+  vec2 e2 = vec2(
+    0.30 + 0.16 * cos(t + PI),
+    -0.30 * sin(t)
+  );
+
+  float electron1 = exp(-55.0 * length(p - e1));
+  float electron2 = exp(-55.0 * length(p - e2));
+
+  colour += vec3(1.0, 0.88, 0.35) * electron1 * 1.1;
+  colour += vec3(0.65, 1.0, 0.45) * electron2 * 1.1;
+
+  // Nuclear spins: slower, more diffuse.
+  for (int i = 0; i < 4; i++) {
+    float fi = float(i);
+    float angle = t * 0.22 + fi * 1.57;
+    float radius = 0.62 + 0.06 * sin(t * 0.5 + fi);
+
+    vec2 nucleus = radius * vec2(cos(angle), sin(angle));
+    float nucleusGlow = exp(-38.0 * length(p - nucleus));
+
+    colour += vec3(0.78, 0.45, 0.95) * nucleusGlow * 0.45;
+  }
+
+  // Singlet-triplet interconversion.
+  // A compact visual metaphor: the two electron orbits alternately align and
+  // oppose, while colour shifts between singlet-blue and triplet-orange.
+  float coherence = 0.5 + 0.5 * sin(t * 0.75);
+
+  vec3 singlet = vec3(0.18, 0.60, 1.0);
+  vec3 triplet = vec3(1.0, 0.45, 0.18);
+
+  colour += mix(triplet, singlet, coherence) * 0.10;
+
+  // Central quantum “needle”: an abstract inclination-sensitive feature.
+  float needle = exp(-45.0 * r);
+  colour += mix(triplet, singlet, coherence) * needle * 0.35;
+
+  // Field direction as a faint directional trace.
+  vec2 field2D = normalize(u_field.xy + vec2(0.0001));
+  float fieldLine = smoothstep(
+    0.035, 0.0,
+    abs(dot(p, vec2(-field2D.y, field2D.x)))
+  );
+
+  colour += vec3(0.55, 0.75, 1.0) * fieldLine * 0.12;
+
+  // Vignette.
+  colour *= smoothstep(1.55, 0.15, r);
+
+  return colour;
+}
+
+// ---------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------
+
+void main() {
+  vec2 uv = v_uv;
+
+  vec3 colour;
+
+  if (uv.x < 0.5) {
+    // Left: raven’s perspective.
+    vec2 localUv = vec2(uv.x * 2.0, uv.y);
+    colour = ravenView(localUv);
+  } else {
+    // Right: inside the eye.
+    vec2 localUv = vec2((uv.x - 0.5) * 2.0, uv.y);
+
+    if (u_zoom < 0.02) {
+      colour = retinaView(localUv);
+    } else {
+      colour = spinView(localUv);
+    }
+  }
+
+  // Filmic response and subtle grain.
+  colour = colour / (colour + 0.85);
+  colour = pow(colour, vec3(0.88));
+
+  float grain = hash(v_uv * u_resolution + u_time) - 0.5;
+  colour += grain * 0.012;
+
+  gl_FragColor = vec4(colour, 1.0);
+}
+</script>
+
+<script>
+const canvas = document.getElementById("stage");
+const gl = canvas.getContext("webgl", {
+  antialias: true,
+  alpha: false,
+  powerPreference: "high-performance"
+});
+
+if (!gl) {
+  document.body.innerHTML =
+    "<p style='padding:40px'>WebGL is not available in this browser.</p>";
+}
+
+function compileShader(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    throw new Error(gl.getShaderInfoLog(shader));
+  }
+
+  return shader;
+}
+
+const vertexShader = compileShader(
+  gl.VERTEX_SHADER,
+  document.getElementById("vertex").textContent
+);
+
+const fragmentShader = compileShader(
+  gl.FRAGMENT_SHADER,
+  document.getElementById("fragment").textContent
+);
+
+const program = gl.createProgram();
+gl.attachShader(program, vertexShader);
+gl.attachShader(program, fragmentShader);
+gl.linkProgram(program);
+
+if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+  throw new Error(gl.getProgramInfoLog(program));
+}
+
+gl.useProgram(program);
+
+const buffer = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+
+const quad = new Float32Array([
+  -1, -1,
+   1, -1,
+  -1,  1,
+  -1,  1,
+   1, -1,
+   1,  1
+]);
+
+gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
+
+const positionLocation = gl.getAttribLocation(program, "a_position");
+gl.enableVertexAttribArray(positionLocation);
+gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+const uniforms = {
+  resolution: gl.getUniformLocation(program, "u_resolution"),
+  time: gl.getUniformLocation(program, "u_time"),
+  zoom: gl.getUniformLocation(program, "u_zoom"),
+  hover: gl.getUniformLocation(program, "u_hover"),
+  field: gl.getUniformLocation(program, "u_field"),
+  headYaw: gl.getUniformLocation(program, "u_headYaw"),
+  headPitch: gl.getUniformLocation(program, "u_headPitch")
+};
+
+// ---------------------------------------------------------------
+// Interaction
+// ---------------------------------------------------------------
+
+let field = normalize([0.25, 0.65, 0.72]);
+let headYaw = 0;
+let headPitch = 0;
+let zoom = 0;
+let targetZoom = 0;
+let hover = 0;
+let dragging = false;
+let lastX = 0;
+let lastY = 0;
+
+function normalize(vector) {
+  const length = Math.hypot(vector[0], vector[1], vector[2]);
+  return [vector[0] / length, vector[1] / length, vector[2] / length];
+}
+
+function updateFieldFromHead() {
+  // The bird’s heading changes the apparent direction of the field.
+  const yaw = -headYaw;
+  const pitch = -headPitch;
+
+  const x = field[0];
+  const y = field[1];
+  const z = field[2];
+
+  const rotated = [
+    x * Math.cos(yaw) + z * Math.sin(yaw),
+    y * Math.cos(pitch) - z * Math.sin(pitch),
+    -x * Math.sin(yaw) + z * Math.cos(yaw)
+  ];
+
+  return normalize(rotated);
+}
+
+canvas.addEventListener("pointerdown", (event) => {
+  dragging = true;
+  lastX = event.clientX;
+  lastY = event.clientY;
+
+  const rect = canvas.getBoundingClientRect();
+  const x = event.clientX / rect.width;
+  const y = 1 - event.clientY / rect.height;
+
+  // Clicking the right-hand retinal view begins the zoom.
+  if (x > 0.5 && zoom < 0.02) {
+    targetZoom = 1;
+    document.getElementById("hint").classList.add("hidden");
+  }
+});
+
+canvas.addEventListener("pointerup", () => {
+  dragging = false;
+});
+
+canvas.addEventListener("pointermove", (event) => {
+  const rect = canvas.getBoundingClientRect();
+  const x = event.clientX / rect.width;
+  const y = 1 - event.clientY / rect.height;
+
+  if (dragging) {
+    const dx = event.clientX - lastX;
+    const dy = event.clientY - lastY;
+
+    headYaw += dx * 0.004;
+    headPitch += dy * 0.003;
+
+    headPitch = Math.max(-0.7, Math.min(0.7, headPitch));
+
+    lastX = event.clientX;
+    lastY = event.clientY;
+  }
+
+  // Hover feedback only over the retinal view.
+  hover = x > 0.5 && zoom < 0.02 ? 1 : 0;
+});
+
+canvas.addEventListener("pointerleave", () => {
+  hover = 0;
+});
+
+// Double-click returns from the molecular view.
+canvas.addEventListener("dblclick", () => {
+  if (zoom > 0.5) {
+    targetZoom = 0;
+    document.getElementById("hint").classList.remove("hidden");
+  }
+});
+
+// ---------------------------------------------------------------
+// Render loop
+// ---------------------------------------------------------------
+
+function resize() {
+  const devicePixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+
+  canvas.width = Math.floor(window.innerWidth * devicePixelRatio);
+  canvas.height = Math.floor(window.innerHeight * devicePixelRatio);
+
+  canvas.style.width = window.innerWidth + "px";
+  canvas.style.height = window.innerHeight + "px";
+
+  gl.viewport(0, 0, canvas.width, canvas.height);
+}
+
+window.addEventListener("resize", resize);
+resize();
+
+function render(now) {
+  const time = now * 0.001;
+
+  // Smooth zoom transition.
+  zoom += (targetZoom - zoom) * 0.045;
+
+  const currentField = updateFieldFromHead();
+
+  gl.uniform2f(uniforms.resolution, canvas.width, canvas.height);
+  gl.uniform1f(uniforms.time, time);
+  gl.uniform1f(uniforms.zoom, zoom);
+  gl.uniform1f(uniforms.hover, hover);
+  gl.uniform3f(
+    uniforms.field,
+    currentField[0],
+    currentField[1],
+    currentField[2]
+  );
+  gl.uniform1f(uniforms.headYaw, headYaw);
+  gl.uniform1f(uniforms.headPitch, headPitch);
+
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+  requestAnimationFrame(render);
+}
+
+requestAnimationFrame(render);
+</script>
+
+</body>
+</html>
